@@ -3,6 +3,19 @@ from flask import Flask, request, redirect, url_for, render_template_string, fla
 import sqlite3, os, io, csv
 from datetime import datetime
 
+import gspread
+from google.oauth2.service_account import Credentials
+
+# === Google Sheets povezava ===
+SHEET_ID = "1l8fwVCei-w-QfUzHUHTpss4d6Texgz4B7NA7LLE-tiw"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SERVICE_JSON_PATH = "/etc/secrets/service_account.json"
+if not os.path.isfile(SERVICE_JSON_PATH):
+    SERVICE_JSON_PATH = "service_account.json"
+CREDS = Credentials.from_service_account_file(SERVICE_JSON_PATH, scopes=SCOPES)
+_gc = gspread.authorize(CREDS)
+_sheet = _gc.open_by_key(SHEET_ID).sheet1
+
 app = Flask(__name__)
 app.secret_key = "change_me_secret"  # zamenjaj po želji
 
@@ -19,6 +32,8 @@ PREDMETI = [
 
 ADMIN_PASS = "tutor2025"  # spremeni po želji
 
+
+# ---------- BAZA ----------
 def init_db():
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -37,6 +52,7 @@ def init_db():
     con.commit()
     con.close()
 
+
 def add_prijava(ime, priimek, email, razred, oddelek, predmeti_str):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -47,6 +63,7 @@ def add_prijava(ime, priimek, email, razred, oddelek, predmeti_str):
     con.commit()
     con.close()
 
+
 def get_all_prijave():
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -55,7 +72,8 @@ def get_all_prijave():
     con.close()
     return rows
 
-# ---------- HTML (inline) ----------
+
+# ---------- HTML ----------
 FORM_HTML = """
 <!doctype html>
 <html lang="sl">
@@ -150,82 +168,6 @@ FORM_HTML = """
 </html>
 """
 
-LOGIN_HTML = """
-<!doctype html>
-<html lang="sl">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Admin prijava</title>
-  <style>
-    body{font-family:system-ui,sans-serif;background:#fafafa;margin:0;padding:20px;color:#222}
-    .wrap{max-width:420px;margin:10vh auto;background:#fff;padding:24px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
-    .msg{padding:8px;border-radius:6px;margin-bottom:8px;background:#fdecea;border:1px solid #f5c2c0}
-    input,button{width:100%;padding:10px;margin-top:8px;border-radius:6px;border:1px solid #ccc}
-    button{background:#0077cc;color:#fff;border:none;cursor:pointer}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h1>Admin</h1>
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}{% for cat, m in messages %}<div class="msg">{{ m }}</div>{% endfor %}{% endif %}
-    {% endwith %}
-    <form method="post">
-      <input type="password" name="password" placeholder="Geslo" required>
-      <button type="submit">Prijava</button>
-    </form>
-  </div>
-</body>
-</html>
-"""
-
-ADMIN_HTML = """
-<!doctype html>
-<html lang="sl">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Pregled prijav</title>
-  <style>
-    body{font-family:system-ui,sans-serif;background:#fafafa;margin:0;padding:20px;color:#222}
-    .wrap{max-width:1000px;margin:0 auto;background:#fff;padding:24px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    th,td{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}
-    th{background:#f0f0f0}
-    .actions{display:flex;gap:8px;margin-top:10px}
-    a.btn,form button{display:inline-block;padding:8px 12px;background:#0077cc;color:#fff;text-decoration:none;border-radius:6px;border:none;cursor:pointer}
-    form{display:inline}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h1>Pregled prijav</h1>
-    <div class="actions">
-      <a class="btn" href="{{ url_for('export_csv') }}">Izvozi CSV (Excel)</a>
-      <form method="post" action="{{ url_for('admin_logout') }}"><button>Odjava</button></form>
-    </div>
-    <table>
-      <thead>
-        <tr><th>Datum</th><th>Ime</th><th>Priimek</th><th>E-pošta</th><th>Razred</th><th>Oddelek</th><th>Predmeti (učitelj)</th></tr>
-      </thead>
-      <tbody>
-        {% for r in prijave %}
-        <tr>
-          <td>{{ r[0] }}</td>
-          <td>{{ r[1] }}</td>
-          <td>{{ r[2] }}</td>
-          <td>{{ r[3] }}</td>
-          <td>{{ r[4] }}</td>
-          <td>{{ r[5] }}</td>
-          <td>{{ r[6] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</body>
-</html>
-"""
-
 # ---------- RUTE ----------
 @app.get("/")
 def index():
@@ -244,7 +186,6 @@ def oddaj():
         flash("Izpolnite vsa obvezna polja (ime, priimek, e-pošta, razred, oddelek).", "error")
         return redirect(url_for("index"))
 
-    # izbrani predmeti + učitelji
     pari = []
     for code, label in PREDMETI:
         if f.get(f"chk_{code}") == "on":
@@ -255,11 +196,24 @@ def oddaj():
             pari.append(f"{label} ({teach})")
 
     predmeti_str = "; ".join(pari) if pari else "—"
+
+    # shranimo v SQLite
     add_prijava(ime, priimek, email, razred, oddelek, predmeti_str)
+
+    # --- Zapiši tudi v Google Sheets ---
+    try:
+        worksheet = _sheet
+        worksheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            ime, priimek, email, razred, oddelek, predmeti_str
+        ])
+    except Exception as e:
+        print("Napaka pri zapisu v Google Sheets:", e)
+
     flash("Prijava uspešno oddana. Hvala!", "ok")
     return redirect(url_for("index"))
 
-# --- ADMIN auth (preprosto) ---
+# --- ADMIN ---
 def admin_ok():
     return session.get("admin_ok") is True
 
@@ -267,6 +221,10 @@ def admin_ok():
 def admin_login():
     if admin_ok():
         return redirect(url_for("admin_panel"))
+    LOGIN_HTML = """
+    <h2>Admin prijava</h2>
+    <form method='post'><input type='password' name='password'><button>Prijava</button></form>
+    """
     return render_template_string(LOGIN_HTML)
 
 @app.post("/admin")
@@ -282,17 +240,16 @@ def admin_panel():
     if not admin_ok():
         return redirect(url_for("admin_login"))
     prijave = get_all_prijave()
-    return render_template_string(ADMIN_HTML, prijave=prijave)
-
-@app.post("/admin/logout")
-def admin_logout():
-    session.clear()
-    return redirect(url_for("admin_login"))
+    ADMIN_HTML = "<h2>Prijave</h2><table border='1'><tr><th>Datum</th><th>Ime</th><th>Priimek</th><th>Email</th><th>Razred</th><th>Oddelek</th><th>Predmeti</th></tr>"
+    for r in prijave:
+        ADMIN_HTML += f"<tr>{''.join(f'<td>{c}</td>' for c in r)}</tr>"
+    ADMIN_HTML += "</table>"
+    ADMIN_HTML += "<p><a href='/export'>Izvozi CSV</a></p>"
+    return ADMIN_HTML
 
 @app.get("/export")
 def export_csv():
     if not admin_ok():
-
         return redirect(url_for("admin_login"))
     rows = get_all_prijave()
     buf = io.StringIO()
@@ -301,12 +258,7 @@ def export_csv():
     for r in rows:
         w.writerow(list(r))
     data = buf.getvalue().encode("utf-8-sig")
-    return send_file(
-        io.BytesIO(data),
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name="prijave_tutorstvo.csv"
-    )
+    return send_file(io.BytesIO(data), mimetype="text/csv", as_attachment=True, download_name="prijave_tutorstvo.csv")
 
 if __name__ == "__main__":
     init_db()

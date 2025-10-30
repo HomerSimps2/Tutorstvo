@@ -1,0 +1,6 @@
+# Ignoriraj občutljive in začasne datoteke
+service_account.json
+__pycache__/
+*.db
+*.sqlite
+.env
