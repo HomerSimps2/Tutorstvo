@@ -17,10 +17,11 @@ _gc = gspread.authorize(CREDS)
 _sheet = _gc.open_by_key(SHEET_ID).sheet1
 
 app = Flask(__name__)
-app.secret_key = "change_me_secret"
+app.secret_key = "change_me_secret"  # zamenjaj po želji
 
 DB_PATH = "tutorstvo.db"
 
+# (code, label)
 PREDMETI = [
     ("mat", "Matematika"), ("fiz", "Fizika"), ("ang", "Angleščina"),
     ("inf", "Informatika"), ("kem", "Kemija"), ("nem", "Nemščina"),
@@ -29,7 +30,8 @@ PREDMETI = [
     ("fra", "Francoščina"),
 ]
 
-ADMIN_PASS = "tutor2025"
+ADMIN_PASS = "tutor2025"  # spremeni po želji
+
 
 # ---------- BAZA ----------
 def init_db():
@@ -50,6 +52,7 @@ def init_db():
     con.commit()
     con.close()
 
+
 def add_prijava(ime, priimek, email, razred, oddelek, predmeti_str):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -60,6 +63,7 @@ def add_prijava(ime, priimek, email, razred, oddelek, predmeti_str):
     con.commit()
     con.close()
 
+
 def get_all_prijave():
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -68,33 +72,127 @@ def get_all_prijave():
     con.close()
     return rows
 
-def delete_prijava_by_id(pid):
+
+def delete_prijava(prijava_id):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    cur.execute("DELETE FROM prijave WHERE id=?", (pid,))
-    con.commit()
+    cur.execute("SELECT ime, priimek, email FROM prijave WHERE id=?", (prijava_id,))
+    prijava = cur.fetchone()
+    if prijava:
+        cur.execute("DELETE FROM prijave WHERE id=?", (prijava_id,))
+        con.commit()
     con.close()
 
-# ---------- BRISANJE IZ GOOGLE SHEETS ----------
-def delete_from_sheet(email, datum):
+    # Poskusi izbrisati tudi iz Google Sheeta
     try:
         all_rows = _sheet.get_all_values()
-        for i, row in enumerate(all_rows, start=1):
-            if len(row) >= 4 and row[0] == datum and row[3] == email:
-                _sheet.delete_rows(i)
-                print(f"Izbrisana vrstica {i} iz Google Sheets.")
-                return True
+        for i, row in enumerate(all_rows):
+            if prijava and prijava[0] in row and prijava[1] in row and prijava[2] in row:
+                _sheet.delete_rows(i + 1)
+                break
     except Exception as e:
-        print("Napaka pri brisanju iz Google Sheets:", e)
-    return False
+        print("Napaka pri brisanju v Google Sheets:", e)
 
-# ---------- HTML OBRAZEC ----------
-FORM_HTML = """ ... (tvoj obrazec ostane enak) ... """
+
+# ---------- HTML ----------
+FORM_HTML = """
+<!doctype html>
+<html lang="sl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prijava na tutorstvo</title>
+  <style>
+    body{font-family:system-ui,sans-serif;background:#f5f5f5;margin:0;padding:20px;color:#222}
+    .wrap{max-width:760px;margin:0 auto;background:#fff;padding:24px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+    h1{text-align:center;margin:0 0 10px}
+    label{display:block;margin-top:12px;font-weight:600}
+    input,select{width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #ccc}
+    fieldset{border:1px solid #ddd;border-radius:8px;margin-top:16px;padding:12px}
+    legend{font-weight:bold}
+    .subject{display:grid;grid-template-columns:24px 1fr;column-gap:8px;align-items:center;margin:6px 0}
+    .subject input[type="checkbox"]{width:18px;height:18px;margin:0;justify-self:start;align-self:center}
+    .teacher-tab{margin-left:calc(24px + 8px);margin-top:4px;display:none}
+    .msg{padding:8px;border-radius:6px;margin-bottom:8px}
+    .ok{background:#e8f6ec;border:1px solid #bfe7cc}
+    .error{background:#fdecea;border:1px solid #f5c2c0}
+    button{margin-top:20px;padding:10px 16px;border:none;background:#0077cc;color:#fff;border-radius:6px;cursor:pointer}
+    button:hover{background:#005fa3}
+    .hint{font-size:12px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Prijava na tutorstvo</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat, m in messages %}
+          <div class="msg {{cat}}">{{ m }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="post" action="{{ url_for('oddaj') }}">
+      <label>Ime <input name="ime" required></label>
+      <label>Priimek <input name="priimek" required></label>
+      <label>E-pošta <input type="email" name="email" required></label>
+      <label>Razred
+        <select name="razred" required>
+          <option value="">— izberi —</option>
+          <option>1. letnik</option><option>2. letnik</option>
+          <option>3. letnik</option><option>4. letnik</option>
+        </select>
+      </label>
+      <label>Oddelek
+        <select name="oddelek" required>
+          <option value="">— izberi —</option>
+          <option>a</option><option>b</option><option>c</option>
+          <option>d</option><option>e</option><option>f</option>
+        </select>
+      </label>
+
+      <fieldset>
+        <legend>Predmeti za inštrukcije</legend>
+        {% for code, label in predmeti %}
+          <div class="subject">
+            <input type="checkbox" id="chk_{{code}}" name="chk_{{code}}">
+            <label for="chk_{{code}}">{{label}}</label>
+          </div>
+          <div class="teacher-tab" id="tab_{{code}}">
+            <label>Učitelj {{label}} <input name="teacher_{{code}}"></label>
+          </div>
+        {% endfor %}
+      </fieldset>
+
+      <button type="submit">Oddaj prijavo</button>
+      <p class="hint">Admin pregled: <a href="{{ url_for('admin_login') }}">/admin</a></p>
+    </form>
+  </div>
+
+  <script>
+    document.querySelectorAll('input[type="checkbox"][id^="chk_"]').forEach(cb=>{
+      const code = cb.id.replace('chk_','');
+      const tab = document.getElementById('tab_'+code);
+      const input = tab.querySelector('input');
+      const sync = ()=>{
+        const show = cb.checked;
+        tab.style.display = show ? 'block' : 'none';
+        if(show){ input.setAttribute('required','required'); }
+        else { input.removeAttribute('required'); input.value=''; }
+      };
+      cb.addEventListener('change', sync);
+      sync();
+    });
+  </script>
+</body>
+</html>
+"""
 
 # ---------- RUTE ----------
 @app.get("/")
 def index():
     return render_template_string(FORM_HTML, predmeti=PREDMETI)
+
 
 @app.post("/oddaj")
 def oddaj():
@@ -119,21 +217,25 @@ def oddaj():
             pari.append(f"{label} ({teach})")
 
     predmeti_str = "; ".join(pari) if pari else "—"
-    datum = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     add_prijava(ime, priimek, email, razred, oddelek, predmeti_str)
 
     try:
-        _sheet.append_row([datum, ime, priimek, email, razred, oddelek, predmeti_str])
+        _sheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            ime, priimek, email, razred, oddelek, predmeti_str
+        ])
     except Exception as e:
         print("Napaka pri zapisu v Google Sheets:", e)
 
     flash("Prijava uspešno oddana. Hvala!", "ok")
     return redirect(url_for("index"))
 
+
 # --- ADMIN ---
 def admin_ok():
     return session.get("admin_ok") is True
+
 
 @app.get("/admin")
 def admin_login():
@@ -147,6 +249,7 @@ def admin_login():
     </form>
     """)
 
+
 @app.post("/admin")
 def admin_do_login():
     if request.form.get("password") == ADMIN_PASS:
@@ -155,50 +258,33 @@ def admin_do_login():
     flash("Napačno geslo.", "error")
     return redirect(url_for("admin_login"))
 
+
 @app.get("/admin/panel")
 def admin_panel():
     if not admin_ok():
         return redirect(url_for("admin_login"))
     prijave = get_all_prijave()
-    ADMIN_HTML = """
-    <html><head><style>
-    body{font-family:sans-serif;background:#f9f9f9;padding:20px;}
-    table{border-collapse:collapse;width:100%;background:#fff;}
-    th,td{border:1px solid #ddd;padding:8px;text-align:left;}
-    th{background:#eee;}
-    .btn{background:#0077cc;color:#fff;padding:6px 10px;border-radius:4px;text-decoration:none;}
-    .del{background:#cc0000;}
-    </style></head><body>
-    <h2>Prijave</h2>
-    <p>
-      <a class='btn' href='/export'>Izvozi CSV</a>
-      <a class='btn' href='https://docs.google.com/spreadsheets/d/1l8fwVCei-w-QfUzHUHTpss4d6Texgz4B7NA7LLE-tiw' target='_blank'>Odpri Google preglednico</a>
-    </p>
-    <table>
-    <tr><th>Datum</th><th>Ime</th><th>Priimek</th><th>Email</th><th>Razred</th><th>Oddelek</th><th>Predmeti</th><th>Dejanje</th></tr>
-    """
+    html = "<h2>Pregled prijav</h2><table border='1'><tr><th>Datum</th><th>Ime</th><th>Priimek</th><th>Email</th><th>Razred</th><th>Oddelek</th><th>Predmeti</th><th>Akcije</th></tr>"
     for r in prijave:
-        rid, datum, ime, priimek, email, razred, oddelek, predmeti = r
-        ADMIN_HTML += f"<tr><td>{datum}</td><td>{ime}</td><td>{priimek}</td><td>{email}</td><td>{razred}</td><td>{oddelek}</td><td>{predmeti}</td><td><form method='post' action='/admin/delete/{rid}'><input type='hidden' name='datum' value='{datum}'><input type='hidden' name='email' value='{email}'><button class='btn del'>Izbriši</button></form></td></tr>"
-    ADMIN_HTML += "</table></body></html>"
-    return ADMIN_HTML
+        html += f"<tr>{''.join(f'<td>{c}</td>' for c in r[1:])}<td><a href='/admin/delete/{r[0]}'>🗑️ Izbriši</a></td></tr>"
+    html += "</table><p><a href='/export'>Izvozi CSV</a></p><p><a href='/admin/logout'>Odjava</a></p>"
+    return html
 
-@app.post("/admin/delete/<int:pid>")
-def admin_delete(pid):
+
+@app.get("/admin/delete/<int:prijava_id>")
+def admin_delete(prijava_id):
     if not admin_ok():
         return redirect(url_for("admin_login"))
-
-    datum = request.form.get("datum")
-    email = request.form.get("email")
-
-    # izbriši iz SQLite
-    delete_prijava_by_id(pid)
-
-    # izbriši iz Google Sheets
-    delete_from_sheet(email, datum)
-
+    delete_prijava(prijava_id)
     flash("Prijava izbrisana.", "ok")
     return redirect(url_for("admin_panel"))
+
+
+@app.get("/admin/logout")
+def admin_logout():
+    session.clear()
+    return redirect(url_for("admin_login"))
+
 
 @app.get("/export")
 def export_csv():
@@ -209,9 +295,10 @@ def export_csv():
     w = csv.writer(buf)
     w.writerow(["Datum","Ime","Priimek","E-pošta","Razred","Oddelek","Predmeti"])
     for r in rows:
-        w.writerow(r[1:])
+        w.writerow(list(r[1:]))
     data = buf.getvalue().encode("utf-8-sig")
     return send_file(io.BytesIO(data), mimetype="text/csv", as_attachment=True, download_name="prijave_tutorstvo.csv")
+
 
 if __name__ == "__main__":
     init_db()
